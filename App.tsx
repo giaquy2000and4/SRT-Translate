@@ -229,10 +229,6 @@ const App: React.FC = () => {
             originalFileName={fileName}
           />
         </main>
-
-        <footer className="text-center mt-8 text-gray-500 text-sm">
-          <p>Powered by Google Gemini</p>
-        </footer>
       </div>
     </div>
   );
