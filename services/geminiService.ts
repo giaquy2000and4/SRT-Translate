@@ -99,3 +99,42 @@ export const translateSrtContent = async (
     throw new Error('Failed to get a valid response from the AI model during batch processing.');
   }
 };
+
+/**
+ * Detects the language of a given text sample.
+ * @param ai The GoogleGenAI instance.
+ * @param textSample A sample of text from the SRT file.
+ * @returns A promise that resolves to the detected language name (e.g., "English").
+ */
+export const detectLanguage = async (ai: GoogleGenAI, textSample: string): Promise<string> => {
+  if (!textSample.trim()) {
+    return 'Unknown';
+  }
+
+  const prompt = `Identify the language of the following text.
+Respond with only the name of the language in English (e.g., "English", "Spanish", "Japanese").
+Do not add any other words, punctuation, or explanation.
+
+Text:
+---
+${textSample}
+---
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+    });
+    
+    const language = response.text.trim();
+    // Basic validation to ensure it's not a long sentence or an error message.
+    if (language && language.length < 30 && !language.includes('\n')) {
+      return language;
+    }
+    return 'Unknown';
+  } catch (error) {
+    console.error('Error during language detection:', error);
+    throw new Error('Failed to detect language due to an API error.');
+  }
+};

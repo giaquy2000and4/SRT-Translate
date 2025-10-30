@@ -2,13 +2,14 @@ import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
 import { SrtEntry, TranslatedSrt, TranslationJob } from './types';
-import { translateSrtContent } from './services/geminiService';
-import { parseSrt, stringifySrt } from './services/srtParser';
+import { translateSrtContent, detectLanguage } from './services/geminiService';
+import { parseSrt, stringifySrt, calculateSrtDuration } from './services/srtParser';
 
 import FileUpload from './components/FileUpload';
 import LanguageSelector from './components/LanguageSelector';
 import ResultDisplay from './components/ResultDisplay';
 import ProgressDisplay from './components/ProgressDisplay';
+import FileInfoDisplay from './components/FileInfoDisplay';
 import { TranslateIcon } from './components/icons/TranslateIcon';
 import { PauseIcon } from './components/icons/PauseIcon';
 import { ResumeIcon } from './components/icons/ResumeIcon';
@@ -17,6 +18,11 @@ import { InfoIcon } from './components/icons/InfoIcon';
 import { LANGUAGE_CODE_MAP } from './constants';
 
 type Status = 'idle' | 'running' | 'paused';
+interface FileInfo {
+  count: number;
+  duration: string;
+  language: string;
+}
 
 const App: React.FC = () => {
   const [originalSrtContent, setOriginalSrtContent] = useState<string>('');
@@ -28,6 +34,8 @@ const App: React.FC = () => {
   const [error, setError] = useState<string>('');
   const [progressMessage, setProgressMessage] = useState<string>('');
   const [startTime, setStartTime] = useState<number | null>(null);
+  const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
+  const [isDetectingLanguage, setIsDetectingLanguage] = useState(false);
   
   const ai = useMemo(() => {
     if (process.env.API_KEY) {
@@ -37,14 +45,49 @@ const App: React.FC = () => {
     return null;
   }, []);
 
-  const handleFileSelect = (content: string, name: string) => {
+  const handleFileSelect = useCallback(async (content: string, name: string) => {
     setOriginalSrtContent(content);
     setFileName(name);
     setTranslationJobs([]);
     setError('');
     setProgressMessage('');
     setStatus('idle');
-  };
+    setFileInfo(null);
+    setTargetLanguages([]);
+    
+    if (!ai) {
+      setError("API key not configured.");
+      return;
+    }
+
+    try {
+      const parsedSrt = parseSrt(content);
+      if (parsedSrt.length === 0) {
+        setError("The uploaded file is empty or not a valid SRT file.");
+        return;
+      }
+      
+      const count = parsedSrt.length;
+      const duration = calculateSrtDuration(parsedSrt);
+      
+      setFileInfo({ count, duration, language: 'Detecting...' });
+      setIsDetectingLanguage(true);
+
+      const textSample = parsedSrt.slice(0, 10).map(e => e.text).join(' ');
+      const detectedLang = await detectLanguage(ai, textSample);
+      
+      setFileInfo({ count, duration, language: detectedLang });
+
+    } catch(e) {
+      const message = e instanceof Error ? e.message : 'Failed to analyze file.';
+      setError(message);
+      if (fileInfo) {
+        setFileInfo(prev => prev ? {...prev, language: 'Unknown'} : null);
+      }
+    } finally {
+      setIsDetectingLanguage(false);
+    }
+  }, [ai]);
 
   const handleStart = useCallback(() => {
     if (!originalSrtContent) {
@@ -187,11 +230,16 @@ const App: React.FC = () => {
 
         <main className="bg-gray-800/50 backdrop-blur-sm p-6 md:p-8 rounded-2xl shadow-2xl border border-gray-700 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-            <FileUpload onFileSelect={handleFileSelect} fileName={fileName} />
+            <div className="space-y-4">
+              <FileUpload onFileSelect={handleFileSelect} fileName={fileName} />
+              {fileInfo && <FileInfoDisplay info={fileInfo} isLoading={isDetectingLanguage} />}
+            </div>
             <div className="space-y-4">
               <LanguageSelector
                 selectedLanguages={targetLanguages}
                 onLanguageChange={setTargetLanguages}
+                originalLanguage={fileInfo?.language}
+                disabled={!fileInfo}
               />
               <div>
                 <div className="relative group flex items-center gap-1.5 cursor-pointer">
@@ -227,11 +275,11 @@ const App: React.FC = () => {
                   <>
                     <button
                       onClick={handleStart}
-                      disabled={!originalSrtContent || targetLanguages.length === 0}
+                      disabled={!originalSrtContent || targetLanguages.length === 0 || isDetectingLanguage}
                       className="w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-900/50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-indigo-500/50 transform hover:scale-105 disabled:scale-100"
                     >
                       <TranslateIcon />
-                      Translate
+                      {isDetectingLanguage ? 'Analyzing File...' : 'Translate'}
                     </button>
                     {progressMessage && <p className="text-center text-sm text-gray-400 mt-2">{progressMessage}</p>}
                   </>
