@@ -32,16 +32,36 @@ const formatTime = (ms: number): string => {
   if (ms <= 0) return '';
   if (ms < 1000) return '~ < 1s remaining';
 
-  const totalSeconds = Math.round(ms / 1000);
+  let totalSeconds = Math.round(ms / 1000);
+
+  const days = Math.floor(totalSeconds / 86400);
+  totalSeconds %= 86400;
+
+  const hours = Math.floor(totalSeconds / 3600);
+  totalSeconds %= 3600;
+
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
 
-  let result = '~ ';
-  if (minutes > 0) {
-    result += `${minutes}m `;
+  const parts = [];
+  if (days > 0) {
+    parts.push(`${days}d`);
   }
-  result += `${seconds.toString().padStart(2, '0')}s remaining`;
-  return result;
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes}m`);
+  }
+  if (seconds > 0) {
+    parts.push(`${seconds}s`);
+  }
+
+  if (parts.length === 0) {
+    return '~ 0s remaining';
+  }
+
+  return `~ ${parts.join(' ')} remaining`;
 };
 
 
