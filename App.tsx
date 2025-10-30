@@ -1,15 +1,15 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
-import { SrtEntry, TranslatedSrt } from './types';
+import { SrtEntry, TranslatedSrt, TranslationJob } from './types';
 import { translateSrtContent } from './services/geminiService';
 import { parseSrt, stringifySrt } from './services/srtParser';
 
 import FileUpload from './components/FileUpload';
 import LanguageSelector from './components/LanguageSelector';
 import ResultDisplay from './components/ResultDisplay';
+import ProgressDisplay from './components/ProgressDisplay';
 import { TranslateIcon } from './components/icons/TranslateIcon';
-import { SpinnerIcon } from './components/icons/SpinnerIcon';
 import { PauseIcon } from './components/icons/PauseIcon';
 import { ResumeIcon } from './components/icons/ResumeIcon';
 import { CancelIcon } from './components/icons/CancelIcon';
@@ -20,12 +20,10 @@ const App: React.FC = () => {
   const [originalSrtContent, setOriginalSrtContent] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
   const [targetLanguages, setTargetLanguages] = useState<string[]>([]);
-  const [translatedSrtFiles, setTranslatedSrtFiles] = useState<TranslatedSrt[]>([]);
+  const [translationJobs, setTranslationJobs] = useState<TranslationJob[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string>('');
-  const [progress, setProgress] = useState<string>('');
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [accumulatedErrors, setAccumulatedErrors] = useState<string[]>([]);
+  const [progressMessage, setProgressMessage] = useState<string>('');
   
   const ai = useMemo(() => {
     if (process.env.API_KEY) {
@@ -38,9 +36,9 @@ const App: React.FC = () => {
   const handleFileSelect = (content: string, name: string) => {
     setOriginalSrtContent(content);
     setFileName(name);
-    setTranslatedSrtFiles([]);
+    setTranslationJobs([]);
     setError('');
-    setProgress('');
+    setProgressMessage('');
     setStatus('idle');
   };
 
@@ -58,15 +56,17 @@ const App: React.FC = () => {
       return;
     }
     setError('');
-    setAccumulatedErrors([]);
-    setTranslatedSrtFiles([]);
-    setCurrentIndex(0);
+    setProgressMessage('');
+    const jobs: TranslationJob[] = targetLanguages.map(lang => ({
+      language: lang,
+      status: 'pending',
+    }));
+    setTranslationJobs(jobs);
     setStatus('running');
   }, [originalSrtContent, targetLanguages, ai]);
 
   const handlePause = () => {
     setStatus('paused');
-    setProgress(`Paused. Translated ${currentIndex}/${targetLanguages.length}.`);
   };
 
   const handleResume = () => {
@@ -75,40 +75,64 @@ const App: React.FC = () => {
 
   const handleCancel = () => {
     setStatus('idle');
-    setProgress('');
+    setProgressMessage('');
     setError('');
-    setTranslatedSrtFiles([]);
-    setCurrentIndex(0);
-    setAccumulatedErrors([]);
+    setTranslationJobs([]);
   };
 
   useEffect(() => {
-    if (status !== 'running' || currentIndex >= targetLanguages.length) {
-      if (status === 'running' && currentIndex >= targetLanguages.length) {
+    if (status !== 'running') {
+      return;
+    }
+
+    const isJobRunning = translationJobs.some(job => job.status === 'translating');
+    if (isJobRunning) {
+      return; // Wait for the current job to finish
+    }
+
+    const nextJobIndex = translationJobs.findIndex(job => job.status === 'pending');
+
+    if (nextJobIndex === -1) {
+      // All jobs are done
+      if (translationJobs.length > 0) {
         setStatus('idle');
-        setProgress(`Finished! Translated ${currentIndex} file(s).`);
-        if (accumulatedErrors.length > 0) {
-          setError(`Some translations failed:\n${accumulatedErrors.join('\n')}`);
+        const completedCount = translationJobs.filter(job => job.status === 'completed').length;
+        setProgressMessage(`Finished! Translated ${completedCount}/${translationJobs.length} file(s).`);
+        const failedJobs = translationJobs.filter(job => job.status === 'failed');
+        if (failedJobs.length > 0) {
+          setError(`Some translations failed. See details in the progress list.`);
         }
       }
       return;
     }
 
-    let isComponentMounted = true;
-
     const processItem = async () => {
       if (!ai) return;
 
-      const lang = targetLanguages[currentIndex];
-      setProgress(`Translating to ${lang} (${currentIndex + 1}/${targetLanguages.length})...`);
+      const parsedSrt = parseSrt(originalSrtContent);
+      const totalCount = parsedSrt.length;
       
+      setTranslationJobs(prevJobs => prevJobs.map((job, index) => 
+        index === nextJobIndex ? { ...job, status: 'translating', translatedCount: 0, totalCount } : job
+      ));
+
+      const lang = translationJobs[nextJobIndex].language;
+      
+      const handleProgress = (chunkSize: number) => {
+        setTranslationJobs(prevJobs => prevJobs.map((job, index) => {
+            if (index !== nextJobIndex) return job;
+            const newCount = (job.translatedCount || 0) + chunkSize;
+            const finalCount = Math.min(newCount, job.totalCount || totalCount);
+            return { ...job, translatedCount: finalCount };
+        }));
+      };
+
       try {
-        const parsedSrt = parseSrt(originalSrtContent);
-        if (parsedSrt.length === 0) {
+        if (totalCount === 0) {
           throw new Error("The uploaded file does not seem to be a valid SRT file or is empty.");
         }
         
-        const translatedTextArray = await translateSrtContent(ai, parsedSrt, lang);
+        const translatedTextArray = await translateSrtContent(ai, parsedSrt, lang, handleProgress);
         
         const translatedEntries: SrtEntry[] = parsedSrt.map((entry, index) => ({
           ...entry,
@@ -136,31 +160,28 @@ const App: React.FC = () => {
 
         const newFileName = `${nameWithoutExt}.${langCode}.srt`;
         
-        if (isComponentMounted) {
-            setTranslatedSrtFiles(prev => [...prev, { language: lang, content, fileName: newFileName }]);
-        }
+        setTranslationJobs(prevJobs => prevJobs.map((job, index) =>
+            index === nextJobIndex ? { ...job, status: 'completed', content, fileName: newFileName, translatedCount: totalCount } : job
+        ));
 
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Unknown error';
-        if (isComponentMounted) {
-            setAccumulatedErrors(prev => [...prev, `- ${lang}: ${message}`]);
-        }
-      } finally {
-        if (isComponentMounted) {
-            setCurrentIndex(prev => prev + 1);
-        }
+        setTranslationJobs(prevJobs => prevJobs.map((job, index) =>
+            index === nextJobIndex ? { ...job, status: 'failed', error: message } : job
+        ));
       }
     };
     
     processItem();
 
-    return () => {
-      isComponentMounted = false;
-    }
+  }, [status, translationJobs, originalSrtContent, fileName, ai]);
 
-  }, [status, currentIndex, targetLanguages, originalSrtContent, fileName, ai]);
-
-  const isLoading = status === 'running';
+  const translatedFiles = useMemo(() => 
+    translationJobs
+      .filter((job): job is Required<TranslationJob> => job.status === 'completed')
+      .map(job => ({ language: job.language, content: job.content, fileName: job.fileName })),
+    [translationJobs]
+  );
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 flex flex-col items-center justify-center p-4 font-sans">
@@ -180,24 +201,24 @@ const App: React.FC = () => {
                 selectedLanguages={targetLanguages}
                 onLanguageChange={setTargetLanguages}
               />
-               <div className="h-20 flex flex-col justify-center">
+               <div className="min-h-[5rem] flex flex-col justify-center">
                 {status === 'idle' && (
-                  <button
-                    onClick={handleStart}
-                    disabled={!originalSrtContent || targetLanguages.length === 0}
-                    className="w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-900/50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-indigo-500/50 transform hover:scale-105 disabled:scale-100"
-                  >
-                    <TranslateIcon />
-                    Translate
-                  </button>
+                  <>
+                    <button
+                      onClick={handleStart}
+                      disabled={!originalSrtContent || targetLanguages.length === 0}
+                      className="w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-900/50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-indigo-500/50 transform hover:scale-105 disabled:scale-100"
+                    >
+                      <TranslateIcon />
+                      Translate
+                    </button>
+                    {progressMessage && <p className="text-center text-sm text-gray-400 mt-2">{progressMessage}</p>}
+                  </>
                 )}
                 {(status === 'running' || status === 'paused') && (
-                  <div className="space-y-3 text-center">
-                    <p className="text-indigo-300 h-5">
-                      {isLoading ? <SpinnerIcon /> : null}
-                      {progress}
-                    </p>
-                    <div className="flex justify-center gap-4">
+                  <div className="space-y-3">
+                     <ProgressDisplay jobs={translationJobs} appStatus={status} />
+                    <div className="flex justify-center gap-4 pt-2">
                       {status === 'running' && (
                         <button onClick={handlePause} className="flex items-center justify-center gap-2 w-32 bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300 focus:outline-none focus:ring-4 focus:ring-yellow-500/50">
                           <PauseIcon /> Pause
@@ -225,7 +246,7 @@ const App: React.FC = () => {
           )}
 
           <ResultDisplay 
-            translatedFiles={translatedSrtFiles} 
+            translatedFiles={translatedFiles} 
             originalFileName={fileName}
           />
         </main>
