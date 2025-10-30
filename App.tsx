@@ -13,6 +13,7 @@ import { TranslateIcon } from './components/icons/TranslateIcon';
 import { PauseIcon } from './components/icons/PauseIcon';
 import { ResumeIcon } from './components/icons/ResumeIcon';
 import { CancelIcon } from './components/icons/CancelIcon';
+import { InfoIcon } from './components/icons/InfoIcon';
 import { LANGUAGE_CODE_MAP } from './constants';
 
 type Status = 'idle' | 'running' | 'paused';
@@ -193,9 +194,20 @@ const App: React.FC = () => {
                 onLanguageChange={setTargetLanguages}
               />
               <div>
-                <label htmlFor="batch-size" className="block text-sm font-medium text-gray-400">
-                  Batch Size
-                </label>
+                <div className="relative group flex items-center gap-1.5 cursor-pointer">
+                  <label htmlFor="batch-size" className="block text-sm font-medium text-gray-400">
+                    Batch Size
+                  </label>
+                  <InfoIcon />
+                  <div className="absolute left-0 bottom-full mb-2 w-64 hidden group-hover:block bg-gray-900 text-gray-300 text-xs rounded-lg p-3 shadow-lg border border-gray-600 z-10">
+                    <p className="font-bold mb-1">How Batch Size Affects Translation:</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      <li><span className="font-semibold">Speed:</span> Larger batches can be faster as they reduce the number of API calls.</li>
+                      <li><span className="font-semibold">Reliability:</span> Smaller batches are more reliable. If one API call fails, only a small chunk is affected.</li>
+                    </ul>
+                    <p className="mt-2">Recommended range is <span className="font-mono bg-gray-700/50 px-1 py-0.5 rounded">25-100</span>. Default is 50.</p>
+                  </div>
+                </div>
                 <input
                   type="number"
                   id="batch-size"
@@ -207,7 +219,7 @@ const App: React.FC = () => {
                   aria-describedby="batch-size-helper"
                 />
                 <p id="batch-size-helper" className="mt-1 text-xs text-gray-500">
-                  Subtitles per API request. Default: 50.
+                  Subtitles per API request. Hover over the icon for details.
                 </p>
               </div>
                <div className="min-h-[5rem] flex flex-col justify-center">
