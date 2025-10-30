@@ -13,6 +13,7 @@ import { TranslateIcon } from './components/icons/TranslateIcon';
 import { PauseIcon } from './components/icons/PauseIcon';
 import { ResumeIcon } from './components/icons/ResumeIcon';
 import { CancelIcon } from './components/icons/CancelIcon';
+import { LANGUAGE_CODE_MAP } from './constants';
 
 type Status = 'idle' | 'running' | 'paused';
 
@@ -20,10 +21,12 @@ const App: React.FC = () => {
   const [originalSrtContent, setOriginalSrtContent] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
   const [targetLanguages, setTargetLanguages] = useState<string[]>([]);
+  const [batchSize, setBatchSize] = useState<number>(50);
   const [translationJobs, setTranslationJobs] = useState<TranslationJob[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string>('');
   const [progressMessage, setProgressMessage] = useState<string>('');
+  const [startTime, setStartTime] = useState<number | null>(null);
   
   const ai = useMemo(() => {
     if (process.env.API_KEY) {
@@ -57,6 +60,7 @@ const App: React.FC = () => {
     }
     setError('');
     setProgressMessage('');
+    setStartTime(Date.now());
     const jobs: TranslationJob[] = targetLanguages.map(lang => ({
       language: lang,
       status: 'pending',
@@ -78,6 +82,7 @@ const App: React.FC = () => {
     setProgressMessage('');
     setError('');
     setTranslationJobs([]);
+    setStartTime(null);
   };
 
   useEffect(() => {
@@ -96,6 +101,7 @@ const App: React.FC = () => {
       // All jobs are done
       if (translationJobs.length > 0) {
         setStatus('idle');
+        setStartTime(null);
         const completedCount = translationJobs.filter(job => job.status === 'completed').length;
         setProgressMessage(`Finished! Translated ${completedCount}/${translationJobs.length} file(s).`);
         const failedJobs = translationJobs.filter(job => job.status === 'failed');
@@ -132,7 +138,7 @@ const App: React.FC = () => {
           throw new Error("The uploaded file does not seem to be a valid SRT file or is empty.");
         }
         
-        const translatedTextArray = await translateSrtContent(ai, parsedSrt, lang, handleProgress);
+        const translatedTextArray = await translateSrtContent(ai, parsedSrt, lang, batchSize, handleProgress);
         
         const translatedEntries: SrtEntry[] = parsedSrt.map((entry, index) => ({
           ...entry,
@@ -142,22 +148,7 @@ const App: React.FC = () => {
         const content = stringifySrt(translatedEntries);
         const nameWithoutExt = fileName.substring(0, fileName.lastIndexOf('.'));
         
-        let langCode = lang.substring(0, 2).toLowerCase();
-          switch (lang) {
-            case 'Japanese': langCode = 'ja'; break;
-            case 'Spanish': langCode = 'es'; break;
-            case 'Russian': langCode = 'ru'; break;
-            case 'French': langCode = 'fr'; break;
-            case 'German': langCode = 'de'; break;
-            case 'Chinese (Simplified)': langCode = 'zh-CN'; break;
-            case 'Portuguese (Brazil)': langCode = 'pt-BR'; break;
-            case 'Korean': langCode = 'ko'; break;
-            case 'Italian': langCode = 'it'; break;
-            case 'Vietnamese': langCode = 'vi'; break;
-            case 'Arabic': langCode = 'ar'; break;
-            case 'Hindi': langCode = 'hi'; break;
-          }
-
+        const langCode = LANGUAGE_CODE_MAP[lang] || lang.substring(0, 2).toLowerCase();
         const newFileName = `${nameWithoutExt}.${langCode}.srt`;
         
         setTranslationJobs(prevJobs => prevJobs.map((job, index) =>
@@ -174,7 +165,7 @@ const App: React.FC = () => {
     
     processItem();
 
-  }, [status, translationJobs, originalSrtContent, fileName, ai]);
+  }, [status, translationJobs, originalSrtContent, fileName, ai, batchSize]);
 
   const translatedFiles = useMemo(() => 
     translationJobs
@@ -201,6 +192,24 @@ const App: React.FC = () => {
                 selectedLanguages={targetLanguages}
                 onLanguageChange={setTargetLanguages}
               />
+              <div>
+                <label htmlFor="batch-size" className="block text-sm font-medium text-gray-400">
+                  Batch Size
+                </label>
+                <input
+                  type="number"
+                  id="batch-size"
+                  value={batchSize}
+                  onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  min="1"
+                  max="200"
+                  className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-lg shadow-sm py-2 px-3 text-gray-200 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  aria-describedby="batch-size-helper"
+                />
+                <p id="batch-size-helper" className="mt-1 text-xs text-gray-500">
+                  Subtitles per API request. Default: 50.
+                </p>
+              </div>
                <div className="min-h-[5rem] flex flex-col justify-center">
                 {status === 'idle' && (
                   <>
@@ -217,7 +226,7 @@ const App: React.FC = () => {
                 )}
                 {(status === 'running' || status === 'paused') && (
                   <div className="space-y-3">
-                     <ProgressDisplay jobs={translationJobs} appStatus={status} />
+                     <ProgressDisplay jobs={translationJobs} appStatus={status} startTime={startTime} />
                     <div className="flex justify-center gap-4 pt-2">
                       {status === 'running' && (
                         <button onClick={handlePause} className="flex items-center justify-center gap-2 w-32 bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300 focus:outline-none focus:ring-4 focus:ring-yellow-500/50">

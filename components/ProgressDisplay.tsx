@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { TranslationJob } from '../types';
 import { SpinnerIcon } from './icons/SpinnerIcon';
 import { CheckIcon } from './icons/CheckIcon';
@@ -7,6 +7,12 @@ import { PauseIcon } from './icons/PauseIcon';
 import { PendingIcon } from './icons/PendingIcon';
 
 type AppStatus = 'idle' | 'running' | 'paused';
+
+interface ProgressDisplayProps {
+  jobs: TranslationJob[];
+  appStatus: AppStatus;
+  startTime: number | null;
+}
 
 const StatusIcon: React.FC<{ jobStatus: TranslationJob['status'], appStatus: AppStatus }> = ({ jobStatus, appStatus }) => {
   switch (jobStatus) {
@@ -22,7 +28,26 @@ const StatusIcon: React.FC<{ jobStatus: TranslationJob['status'], appStatus: App
   }
 };
 
-const ProgressDisplay: React.FC<{ jobs: TranslationJob[], appStatus: AppStatus }> = ({ jobs, appStatus }) => {
+const formatTime = (ms: number): string => {
+  if (ms <= 0) return '';
+  if (ms < 1000) return '~ < 1s remaining';
+
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  let result = '~ ';
+  if (minutes > 0) {
+    result += `${minutes}m `;
+  }
+  result += `${seconds.toString().padStart(2, '0')}s remaining`;
+  return result;
+};
+
+
+const ProgressDisplay: React.FC<ProgressDisplayProps> = ({ jobs, appStatus, startTime }) => {
+  const [estimatedTime, setEstimatedTime] = useState('');
+  
   if (jobs.length === 0) return null;
 
   const firstJobWithTotal = jobs.find(j => j.totalCount !== undefined);
@@ -34,6 +59,31 @@ const ProgressDisplay: React.FC<{ jobs: TranslationJob[], appStatus: AppStatus }
   const percentage = totalSubtitlesAllJobs > 0 
     ? Math.round((totalTranslatedSubtitles / totalSubtitlesAllJobs) * 100) 
     : 0;
+  
+  useEffect(() => {
+    let intervalId: number | undefined;
+
+    if (appStatus === 'running' && startTime && totalTranslatedSubtitles > 0 && totalTranslatedSubtitles < totalSubtitlesAllJobs) {
+      intervalId = window.setInterval(() => {
+        const elapsedTime = Date.now() - startTime;
+        const subtitlesPerMs = totalTranslatedSubtitles / elapsedTime;
+        const remainingSubtitles = totalSubtitlesAllJobs - totalTranslatedSubtitles;
+        
+        if (subtitlesPerMs > 0) {
+          const remainingTimeMs = remainingSubtitles / subtitlesPerMs;
+          setEstimatedTime(formatTime(remainingTimeMs));
+        }
+      }, 1000);
+    } else {
+      setEstimatedTime('');
+    }
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [jobs, appStatus, startTime, totalSubtitlesAllJobs, totalTranslatedSubtitles]);
 
   return (
     <div className="space-y-2">
@@ -41,24 +91,59 @@ const ProgressDisplay: React.FC<{ jobs: TranslationJob[], appStatus: AppStatus }
         <h3 className="text-sm font-semibold text-gray-400">Overall Progress</h3>
         <span className="text-sm font-medium text-gray-300" aria-live="polite">{percentage}% Complete</span>
       </div>
-      {/* Fix: Changed aria-valuemin and aria-valuemax to be numbers instead of strings to match TypeScript types. */}
       <div className="w-full bg-gray-700 rounded-full h-2.5" role="progressbar" aria-valuenow={percentage} aria-valuemin={0} aria-valuemax={100}>
         <div className="bg-indigo-600 h-2.5 rounded-full transition-all duration-500" style={{ width: `${percentage}%` }}></div>
       </div>
-      <div className="w-full max-h-48 p-3 bg-gray-900 border border-gray-700 rounded-lg overflow-y-auto">
-        <ul className="space-y-2">
-          {jobs.map((job) => (
-            <li key={job.language} className="text-gray-300 text-sm flex items-center gap-3 p-1" title={job.error}>
-              <StatusIcon jobStatus={job.status} appStatus={appStatus} />
-              <span className="flex-1 truncate">{job.language}</span>
-              {(job.status === 'translating' || job.status === 'completed') && job.translatedCount !== undefined && job.totalCount !== undefined && (
-                <span className="text-xs text-gray-400 font-mono whitespace-nowrap tabular-nums">
-                  ({job.translatedCount}/{job.totalCount})
-                </span>
-              )}
-              {job.status === 'failed' && <span className="text-red-400 text-xs truncate">- Failed</span>}
-            </li>
-          ))}
+       {estimatedTime && (
+        <p className="text-right text-xs text-gray-400 -mt-1" aria-live="polite">{estimatedTime}</p>
+      )}
+      <div className="w-full max-h-48 p-3 bg-gray-900 border border-gray-700 rounded-lg overflow-y-auto mt-2">
+        <ul className="space-y-3">
+          {jobs.map((job) => {
+            const jobPercentage = (job.totalCount && job.totalCount > 0)
+              ? Math.round(((job.translatedCount || 0) / job.totalCount) * 100)
+              : 0;
+            
+            const showProgressBar = (job.status === 'translating' || job.status === 'completed' || (job.status === 'failed' && job.translatedCount !== undefined && job.translatedCount > 0));
+
+            const getBarColor = () => {
+              if (job.status === 'completed') return 'bg-green-500';
+              if (job.status === 'failed') return 'bg-red-500';
+              return 'bg-indigo-500';
+            };
+
+            return (
+              <li key={job.language} className="text-gray-300 text-sm" title={job.error ?? undefined}>
+                <div className="flex items-center gap-3">
+                  <StatusIcon jobStatus={job.status} appStatus={appStatus} />
+                  <span className="flex-1 truncate">{job.language}</span>
+                  {(job.status === 'translating' || job.status === 'completed') && job.translatedCount !== undefined && job.totalCount !== undefined && (
+                    <span className="text-xs text-gray-400 font-mono whitespace-nowrap tabular-nums">
+                      ({job.translatedCount}/{job.totalCount})
+                    </span>
+                  )}
+                  {job.status === 'failed' && <span className="text-red-400 text-xs truncate">- Failed</span>}
+                </div>
+                {showProgressBar && job.totalCount && job.totalCount > 0 && (
+                  <div className="mt-1.5 ml-8"> {/* Aligned with text, skipping icon */}
+                    <div 
+                      className="w-full bg-gray-600 rounded-full h-1"
+                      role="progressbar" 
+                      aria-label={`Translation progress for ${job.language}`} 
+                      aria-valuenow={jobPercentage} 
+                      aria-valuemin={0} 
+                      aria-valuemax={100}
+                    >
+                      <div
+                        className={`${getBarColor()} h-1 rounded-full transition-all duration-300`}
+                        style={{ width: `${jobPercentage}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>

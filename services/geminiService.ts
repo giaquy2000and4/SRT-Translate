@@ -2,7 +2,6 @@ import { GoogleGenAI } from '@google/genai';
 import { SrtEntry } from '../types';
 
 const BATCH_SEPARATOR = '|||---|||';
-const CHUNK_SIZE = 50; // Process 50 subtitles per API call for optimal performance and reliability
 
 /**
  * Translates a single chunk of SRT entries.
@@ -62,6 +61,7 @@ ${textToTranslate}
  * @param ai The GoogleGenAI instance.
  * @param entries The array of all SrtEntry objects from the file.
  * @param targetLanguage The language to translate to.
+ * @param batchSize The number of subtitles to process per API call.
  * @param onProgress A callback function to report progress.
  * @returns A promise that resolves to an array of all translated text strings.
  */
@@ -69,12 +69,13 @@ export const translateSrtContent = async (
   ai: GoogleGenAI,
   entries: SrtEntry[],
   targetLanguage: string,
+  batchSize: number,
   onProgress: (chunkSize: number) => void
 ): Promise<string[]> => {
   // Create chunks of subtitles to be processed in parallel.
   const chunks: SrtEntry[][] = [];
-  for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
-    chunks.push(entries.slice(i, i + CHUNK_SIZE));
+  for (let i = 0; i < entries.length; i += batchSize) {
+    chunks.push(entries.slice(i, i + batchSize));
   }
 
   try {
